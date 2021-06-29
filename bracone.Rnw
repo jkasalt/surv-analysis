@@ -1,0 +1,246 @@
+\documentclass[a4paper,12pt]{article}
+\usepackage{subfig}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{csquotes}
+\usepackage[backend = biber, style = authoryear]{biblatex}
+\addbibresource{references.bib}
+\addbibresource{ref_R_packages.bib}
+\usepackage[margin = 2.5cm]{geometry}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhead[L]{Applied Biostatistics}
+\fancyhead[R]{Luca Bracone}
+
+\newcommand{\prob}{\mathbb{P}}
+
+\title{A Survival analysis of chemotherapy for stage B/C colon cancer}
+\author{Luca Bracone}
+
+\begin{document}
+\maketitle
+\nocite{*}
+<<setup, include = FALSE>>=
+library(survival)
+library(knitr)
+library(xtable)
+library(broom)
+library(magrittr)
+opts_chunk$set(echo = FALSE, fig.align = "center")
+@
+
+\section{introduction}
+These are data from one of the first successful trials of adjuvant
+chemotherapy for colon cancer. Levamisole is a low-toxicity
+compound previously used to treat worm infestations in animals;
+5-FU is a moderately toxic (as these things go) chemotherapy
+agent. There are two records per person, one for recurrence and
+one for death.
+
+We make use of the following variables: \texttt{id} id, \texttt{rx} Treatment - Obs(ervation), Lev(amisole), Lev(amisole)+5-FU, \texttt{sex} 1=male, \texttt{age} in years, \texttt{obstruct} obstruction of colon by tumour, \texttt{perfor} perforation of colon, \texttt{adhere} adherence to nearby organs, \texttt{nodes} number of lymph nodes with detectable cancer, \texttt{time} days until event or censoring, \texttt{status} censoring status, \texttt{differ} differentiation of tumour (1=well, 2=moderate, 3=poor), \texttt{extent} Extent of local spread (1=submucosa, 2=muscle, 3=serosa, 4=contiguous structures), \texttt{surg} time from surgery to registration (0=short, 1=long), \texttt{node4} more than 4 positive lymph nodes, \texttt{etype} event type: 1=recurrence,2=death.
+
+\section{Exploratory phase}
+<<hist-age, out.width = "50%", fig.ncol = 2, fig.cap = "A histogram revelas that neither age nor time are normally distributed. Furthermore, event times seem to appear in two “waves”.", fig.subcap = "">>=
+age <- colon$age
+hist(age, col = "bisque", freq = FALSE)
+ker <- density(age)
+curve(dnorm(x ,mean = mean(x), sd = sd(x)), from = min(age), to = max(age), add = TRUE)
+points(ker$x, ker$y, type = "l", lty = 2, col = "blue", lwd = 3)
+tiime <- colon$time
+hist(tiime, col = "bisque", freq = FALSE)
+ker_time <- density(tiime)
+curve(dnorm(x ,mean = mean(x), sd = sd(x)), from = min(tiime), to = max(tiime), add = TRUE)
+points(ker_time$x, ker_time$y, type = "l", lty = 2, col = "blue", lwd = 3)
+@
+
+In this section we resume a few basic statistics of our dataset.
+We see that the mean age of death is $\Sexpr{ round(mean(age), digits = 2) }$ with a standard deviation of $\Sexpr{ round(sd(age), digits = 2) }$.
+On Figure~\ref{fig:hist-age} we see at a glance that age is not normally distributed.
+We make plots to observe the occurrence of the other covariates. The results are displayed on Figure~\ref{fig:bars}.
+We find that $\Sexpr{ round(percent_obstruct["1"], digits = 2) }$\% of
+cancers obstruct the colon, $\Sexpr{ round(percent_perfor["1"], digits = 2)
+}$\% perforate the colon, $\Sexpr{ round(percent_adhere["1"], digits = 2) }$\%
+adhere to other organs, $\Sexpr{ round(percent_differ["1"], digits = 2) }$\%
+differentiate well $\Sexpr{ round(percent_differ["2"], digits = 2) }$\%
+differentiate moderately, $\Sexpr{ round(percent_extent["1"], digits = 2) }$\%
+extend to the submucosa, $\Sexpr{ round(percent_extent["2"], digits = 2) }$\%
+extend to the muscles, $\Sexpr{ round(percent_extent["3"], digits = 2) }$\%
+extend to the serosa, and $\Sexpr{ round(percent_node4["1"], digits = 2) }$\%
+develop more than four positive lymph nodes. On Figure~\ref{fig:bivariate-eda}
+we make box plots of survival time with respect to covariates.
+Finally on Table~\ref{tab:covariance} we printed the covariance matrix of some of our variables.
+<< bars, out.width = "33%", fig.ncol = 3, fig.cap = "occurence of other covariates.", fig.subcap = "">>=
+barplot(table(colon$obstruct), names.arg = c("No", "Yes"), main = "Obstruction of colon by tumor")
+barplot(table(colon$perfor), names.arg = c("No", "Yes"), main = "Perforation of colon")
+barplot(table(colon$adhere), names.arg = c("No", "Yes"), main = "Adherence to nearby organs")
+barplot(table(colon$differ), names.arg = c("Well", "Moderate", "Poor"), main = "Differentiation of tumor")
+barplot(table(colon$extent), names.arg = c("Submucosa", "Muscle", "Serosa", "Contiguous structures"), main = "Extent of local spread")
+barplot(table(colon$node4), names.arg = c("No", "Yes"), main = "More than four positive lymph nodes")
+@
+
+<<compute-tables, include = FALSE>>=
+count_obstruct <- table(colon$obstruct)
+count_perfor   <- table(colon$perfor)
+count_adhere <- table(colon$adhere)
+count_differ <- table(colon$differ)
+count_extent <- table(colon$extent)
+count_node4 <- table(colon$node4)
+
+percent_obstruct <- prop.table(count_obstruct)*100
+percent_perfor   <- prop.table(count_perfor)*100
+percent_adhere <- prop.table(count_adhere)*100
+percent_differ <- prop.table(count_differ)*100
+percent_extent <- prop.table(count_extent)*100
+percent_node4 <- prop.table(count_node4)*100
+univariate1 <- as.data.frame(cbind( count_obstruct, percent_obstruct))
+univariate2 <- as.data.frame(cbind( count_perfor, percent_perfor))
+univariate3 <- as.data.frame(cbind( count_adhere, percent_adhere))
+univariate4 <- as.data.frame(cbind( count_differ, percent_differ))
+univariate5 <- as.data.frame(cbind( count_extent, percent_extent))
+univariate6 <- as.data.frame(cbind( count_node4, percent_node4))
+@
+<<bivariate-eda, fig.cap = "survival time depending on covariates", fig.ncol = 3, fig.subcap = c("obstruct", "perfor", "adhere", "differ", "extent", "node4", "more or less than median age", "treatment"), out.width = "33%">>=
+boxplot(time ~ obstruct, data = colon)
+boxplot(time ~ perfor, data = colon)
+boxplot(time ~ adhere, data = colon)
+boxplot(time ~ differ, data = colon)
+boxplot(time ~ extent, data = colon)
+boxplot(time ~ node4, data = colon)
+age_young <- (colon$age <= 61)
+boxplot(time ~ age_young, data = colon)
+boxplot(time ~ rx, data = colon)
+@
+<<cov, out.width = "50%", results = "asis">>=
+d <- data.frame(
+                obstruct = colon$obstruct,
+                perfor = colon$perfor,
+                adhere = colon$adhere,
+                differ = colon$differ,
+                extent = colon$extent,
+                node4 = colon$node4
+)
+b <- round(cor(d), digits = 2)
+xtable(b, caption = "Correlation matrix of covariates", label = "tab:covariance")
+@
+
+<<age-vs-other, out.width = "33%", fig.cap = "survival vs.\ other covariates", fig.ncol = 3, fig.subcap = c("Overall", "obstruct", "perfor", "adhere", "differ", "extent", "node4", "more or less than median age", "treatment")>>=
+plot(survfit(Surv(time, status) ~ 1, data = colon))
+plot(survfit(Surv(time, status) ~ obstruct, data = colon), col = 1:2)
+plot(survfit(Surv(time, status) ~ perfor, data = colon), col = 1:2)
+plot(survfit(Surv(time, status) ~ adhere, data = colon), col = 1:2)
+plot(survfit(Surv(time, status) ~ differ, data = colon), col = 1:3)
+plot(survfit(Surv(time, status) ~ extent, data = colon), col = 1:4)
+plot(survfit(Surv(time, status) ~ node4, data = colon), col = 1:2)
+age_young <- (colon$age <= 61)
+plot(survfit(Surv(time, status) ~ age_young, data = colon), col = 1:2)
+plot(survfit(Surv(time, status) ~ rx, data = colon), col = 1:3)
+@
+
+\section{Model Fitting}
+\subsection{Kaplan-Meier Estimates}
+
+Unlike in usual statistical analyses, some of our observations are
+\emph{right-censored}. This means that the observed time $\tilde T_i$ is less
+than the real time $T_i$. A common occurence in medical trials where the study
+ends before all participants have had time to meet their demise.
+Throwing away the censored observations not only yields biased and poor
+quality estimates but but is also wasteful of the data (after all their survival
+means something even if we don't know when they die).
+To counteract this issue we have some tools at our disposal, one of which is the Kaplan-Meier estimator $\hat S$. It is a non-parametric estimator of the survival function $S(t) = \prob(T_i \geq t)$ given by
+\[\hat S(t) = \prod_{T_i \leq t} \left\{ 1 - \frac{1}{Z(T_j)} \right\} \]
+where $T_i \in \{ T_j : \text{ individual $j$ is not censored } \}$ and $Z(t)$ counts all the individuals that are at risk of dying $\sum_i I(\tilde T_i \geq t)$ (so called “at risk process”).
+On Figure~\ref{fig:age-vs-other} we drew the Kaplan-Meier estimates separating the participants in groups based on some covariates. 
+We now turn our attention to the estimated curves for the “treatment” variable.
+Consider the \emph{hazard function}
+\[ \alpha(t) = \lim_{h \rightarrow 0} \frac{1}{h} \prob(t \leq T \leq t + h | t \leq T) \]
+it represents the instantaneous rate of death over time, given that the participant survived until time $t$. A little manipulation shows that 
+\[ S(t) = e^{\int_0^t \alpha(s) ds}. \]
+We want to show that $\alpha_1(t) \neq \alpha_2(t)$ for $alpha_1$ the hazard
+rate of
+the participants who did not take the treatment Lev+5FU, and $alpha_2$ the
+hazard rate for those who did. For that it will be convenient to consider the
+quantities $A_i(t) = \int_0^t \alpha_i(s) ds$ for $i = 1,2$ and an estimator for these quanties: the \emph{Nelson-Aalen} estimator
+\[ \hat A_i = \sum_{T_j \leq t} \frac{1}{Z_i(T_j)} \]
+%Let “$\alpha_1(t) \neq \alpha_2(t)$” be the null hypothesis. We compute the \emph{log-rank test} which is approximately $N(0,1)$ distributed under the null hypothesis:
+%\[ U(t_0) = \frac{\sum_j I_j - \frac{r_{1,j}}{R_j}}{\sqrt{\sum_j \frac{r_{1,j}r_{2,j}}{R_j^2}}} \]
+Where $I_j$ 
+<<>>=
+sdiff <- survdiff(Surv(time, status) ~ rx, data = colon)
+sdiff.p <- pchisq(sdiff$chisq, length(sdiff$n)-1, lower.tail = FALSE)
+oee <- (sdiff$obs - sdiff$exp)^2/sdiff$exp
+# oev <- (sdiff$obs - sdiff$exp)^2/sdiff$var
+@
+
+%We want to see if there is a significant difference between the kaplan-meier-estimated curves, depending on the treatment.
+%Let $\mu = \mathbb{E}_{\text{rx = Obs}}(t)$ and $\mu_T = \mathbb{E}_{\text{rx = Lev + 5FU}}(t)$
+%The null hypothsis is $H_0: \mu = \mu_T$. The alternative is $H_1: \mu \neq \mu_T$.
+%We perform log-rank tests on the kaplan meier curves where we grouped participants based on treatment. The results are highlighted in Table~\ref{tab:survdiff}.
+%For a 5\% significant result, the null distance of the $\chi^2$ distribution on $\Sexpr{length(sdiff$n)-1}$ degrees of freedom is $\Sexpr{round(qchisq(0.05, length(sdiff$n)-1), 2)}$. Most remarkably the $\chi^2$-statistic is $\Sexpr{round(sdiff$chisq, 2)}$ for a $p$-value of $\Sexpr{format(sdiff.p, digits =3)}$. So we already have a significant result.
+
+<<survdiff, results = "asis">>=
+xtable(data.frame(sdiff$n, Obs = sdiff$obs, Expected = sdiff$exp, "d//E" = oee),  digits = 2, caption = "Some of the results of logrank test based on treatment", label = "tab:survdiff")
+@
+
+When fitting all the variables and from looking at Figure~\ref{fig:age-vs-other}, we find that the covariates with the highest influence are \texttt{nodes}, \texttt{extent}, and \texttt{treatment} for “Lev+5FU”.
+So we decide to fit a Cox model with these variables.
+\[h(t) = h_0(t)\exp(\beta_1 x_1 + \dots + \beta_3 x_3).\]
+Where $h_0(t)$ is the baseline hazard, $\beta_i$ are coefficients we estimate and $x_i$ are variables that depend on the patient.
+The parameters $\beta_i$ are estimated using maximum partial likelihood.
+To use a Cox model we assume: that the hazards of two individuals remain proportional over time, the covariates are in linear form, and there are no outliers.
+
+<<full-model, include = FALSE>>=
+full.cox = coxph(Surv(time, status) ~ ., data = colon)
+@
+
+<<final-model, results = "asis">>=
+final.cox = coxph(Surv(time,status) ~ (rx == "Lev+5FU") + nodes + extent, data = colon)
+final.tidy = tidy(final.cox)
+xtable(tidy(final.cox),
+       display = c("s", "s", "f", "f", "f", "e"),
+       label="tab:final-cox", caption = "A summary of the chosen cox model")
+@
+
+<<include = FALSE>>=
+fclev5 = final.cox$coefficients["rx == \"Lev+5FU\"TRUE"] %>% round(2)
+fcnods = final.cox$coefficients["nodes"] %>% round(2)
+fcexte = final.cox$coefficients["extent"] %>% round(2)
+@
+
+
+From looking at Table~\ref{tab:final-cox}, the resulting model is
+\[ \hat h(t) = h_0(t) \cdot \exp\bigl(\Sexpr{fclev5}(\text{Lev+5FU}) + \Sexpr{fcnods}(\text{nodes}) + \Sexpr{fcexte}(\text{extent})\bigr) \]
+
+\section{Assessment}
+
+On Figure~\ref{fig:schoenfeld} we illustrate the result of testing the proportional hazards assumption for our model.
+These plots are interpreted in the following way: If the residuals do not sum to zero, the proportional hazards assumption is not verified for that covariate.
+
+<<schoenfeld, fig.cap = "Schoenfeld residuals", fig.ncol = 3, out.width = "33%", fig.subcap = c("Lev+5FU", "nodes", "extent", "global")>>=
+par(pch = 20)
+plot(cox.zph(final.cox))
+@
+
+On Figure~\ref{fig:residuals-1} we plot the martingale residuals (the difference between the observed surival time and expected survival time) against survival time. We note the presence of outliers. On Figure~\ref{fig:residuals-2} we plotted the same figure using deviance residuals:
+\[ \hat d_i = \sign(\hat m_i)  \sqrt{ 2 \tilde (l_i - l_i) } .\]
+Where $l_i$ is the log-likelihood for individual $i$ and $\tilde l_i$ is the maximum possible log-likelihood, and $\hat m_i$ is the martingale residual.
+
+<<residuals, fig.cap = "residuals (log scale) against time (in days)", out.width = "50%", out.height = "30%", fig.ncol = 2, fig.subcap = c("Martingale", "Deviance")>>=
+par(pch = 20)
+res = residuals(final.cox, type = "martingale")
+resd = residuals(final.cox, type = "deviance")
+tiime = colon$time[which(final.cox$y %in% colon$time)]
+plot(res ~ tiime, data = colon)
+plot(resd ~ tiime, data = colon)
+@
+
+\section{Conclusion}
+After doing some preliminary exploratory data analysis, we plotted Kaplan-Meier survival estimates against most covariates of interest. We found that patients undergoing treatment were significantly at higher odds of surviving. We also found other covariates of interest and we fitted a Cox proportional hazards model. We verified that the proportional hazards assumption was verified. However some outliers were found which may put in jeopardy the validity of our model.
+
+<<bibliography>>=
+write_bib(.packages(), file = "ref_R_packages.bib")
+@
+
+\printbibliography
+\end{document}
